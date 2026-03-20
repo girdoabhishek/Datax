@@ -7,10 +7,12 @@ const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 
 const app = express();
+const publicDir = path.join(__dirname, 'public');
 
 app.set('trust proxy', true);
 app.use(cors());
 app.use(express.json());
+app.use(express.static(publicDir));
 
 const PORT = Number(process.env.PORT || 3000);
 const DB_FILE = path.join(__dirname, 'users.json');
@@ -151,7 +153,7 @@ async function sendResetEmail({ to, username, resetLink }) {
 }
 
 function sendPage(res, fileName) {
-    res.sendFile(path.join(__dirname, fileName));
+    res.sendFile(path.join(publicDir, fileName));
 }
 
 app.get('/', (req, res) => {

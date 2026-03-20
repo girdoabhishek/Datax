@@ -1,10 +1,21 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const cors = require('cors');
-const fs = require('fs').promises;
 const path = require('path');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
+const {
+    hasDatabaseConnection,
+    initializeDatabase,
+    createUser,
+    findUserByUsername,
+    findUserByEmail,
+    deleteExpiredResetTokens,
+    replaceResetToken,
+    findResetToken,
+    clearUserResetTokens,
+    updateUserPassword,
+} = require('./db');
 
 const app = express();
 const publicDir = path.join(__dirname, 'public');
@@ -15,9 +26,7 @@ app.use(express.json());
 app.use(express.static(publicDir));
 
 const PORT = Number(process.env.PORT || 3000);
-const DB_FILE = path.join(__dirname, 'users.json');
 const RESET_TOKEN_TTL_MS = 15 * 60 * 1000;
-const resetTokens = new Map();
 let transporterPromise;
 
 function normalizeEmail(value) {
@@ -67,60 +76,6 @@ function getTransporter() {
     return transporterPromise;
 }
 
-function pruneResetTokens() {
-    const now = Date.now();
-
-    for (const [token, data] of resetTokens.entries()) {
-        if (data.expiresAt <= now) {
-            resetTokens.delete(token);
-        }
-    }
-}
-
-function clearUserResetTokens(userId) {
-    for (const [token, data] of resetTokens.entries()) {
-        if (data.userId === userId) {
-            resetTokens.delete(token);
-        }
-    }
-}
-
-function createResetRecord(user, baseUrl) {
-    clearUserResetTokens(user.id);
-    const token = crypto.randomBytes(32).toString('hex');
-    const expiresAt = Date.now() + RESET_TOKEN_TTL_MS;
-
-    resetTokens.set(token, {
-        token,
-        userId: user.id,
-        username: user.username,
-        expiresAt,
-    });
-
-    return {
-        token,
-        expiresAt,
-        resetLink: `${baseUrl}/reset-password.html?token=${token}&username=${encodeURIComponent(user.username)}`,
-    };
-}
-
-async function readDatabase() {
-    try {
-        const data = await fs.readFile(DB_FILE, 'utf8');
-        return JSON.parse(data);
-    } catch (err) {
-        if (err.code === 'ENOENT') {
-            return [];
-        }
-
-        throw err;
-    }
-}
-
-async function writeDatabase(data) {
-    await fs.writeFile(DB_FILE, JSON.stringify(data, null, 2));
-}
-
 async function sendResetEmail({ to, username, resetLink }) {
     const transporter = getTransporter();
 
@@ -152,8 +107,35 @@ async function sendResetEmail({ to, username, resetLink }) {
     });
 }
 
+function buildResetRecord(user, baseUrl) {
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiresAt = Date.now() + RESET_TOKEN_TTL_MS;
+
+    return {
+        token,
+        expiresAt,
+        resetLink: `${baseUrl}/reset-password.html?token=${token}&username=${encodeURIComponent(user.username)}`,
+    };
+}
+
 function sendPage(res, fileName) {
     res.sendFile(path.join(publicDir, fileName));
+}
+
+async function requireDatabase(req, res, next) {
+    if (!hasDatabaseConnection()) {
+        return res.status(503).json({
+            error: 'Database is not configured. Add DATABASE_URL or POSTGRES_URL in Vercel before using signup, login, or password reset.',
+        });
+    }
+
+    try {
+        await initializeDatabase();
+        next();
+    } catch (error) {
+        console.error('Database initialization error:', error);
+        res.status(500).json({ error: 'Could not connect to the database. Check your Postgres environment variables.' });
+    }
 }
 
 app.get('/', (req, res) => {
@@ -172,11 +154,21 @@ app.get('/reset-password.html', (req, res) => {
     sendPage(res, 'reset-password.html');
 });
 
-app.get('/health', (req, res) => {
-    res.status(200).json({ status: 'ok' });
+app.get('/health', async (req, res) => {
+    if (!hasDatabaseConnection()) {
+        return res.status(200).json({ status: 'ok', database: 'missing' });
+    }
+
+    try {
+        await initializeDatabase();
+        res.status(200).json({ status: 'ok', database: 'connected' });
+    } catch (error) {
+        console.error('Health check database error:', error);
+        res.status(500).json({ status: 'error', database: 'failed' });
+    }
 });
 
-app.post('/signup', async (req, res) => {
+app.post('/signup', requireDatabase, async (req, res) => {
     const username = req.body.username?.trim();
     const password = req.body.password;
     const email = normalizeEmail(req.body.email);
@@ -190,41 +182,31 @@ app.post('/signup', async (req, res) => {
     }
 
     try {
-        const users = await readDatabase();
-
-        if (users.find((u) => u.username === username)) {
+        const existingUser = await findUserByUsername(username);
+        if (existingUser) {
             return res.status(409).json({ error: 'Username already exists' });
         }
 
-        if (users.find((u) => normalizeEmail(u.email) === email)) {
+        const existingEmail = await findUserByEmail(email);
+        if (existingEmail) {
             return res.status(409).json({ error: 'Email address is already in use' });
         }
 
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const newUser = {
-            id: Date.now(),
-            username,
-            email,
-            password: hashedPassword,
-        };
-
-        users.push(newUser);
-        await writeDatabase(users);
+        const passwordHash = await bcrypt.hash(password, 10);
+        const user = await createUser({ username, email, passwordHash });
 
         res.status(201).json({
             message: 'User created successfully!',
-            userId: newUser.id,
-            email: newUser.email,
+            userId: user.id,
+            email: user.email,
         });
     } catch (error) {
         console.error('Signup error:', error);
-        res.status(500).json({
-            error: 'Server error during signup. If you deploy to Vercel, replace users.json with a real database because file writes are not persistent there.',
-        });
+        res.status(500).json({ error: 'Server error during signup' });
     }
 });
 
-app.post('/login', async (req, res) => {
+app.post('/login', requireDatabase, async (req, res) => {
     const username = req.body.username?.trim();
     const password = req.body.password;
 
@@ -233,32 +215,31 @@ app.post('/login', async (req, res) => {
     }
 
     try {
-        const users = await readDatabase();
-        const user = users.find((u) => u.username === username);
+        const user = await findUserByUsername(username);
 
         if (!user) {
             return res.status(404).json({ error: 'User not found' });
         }
 
-        const match = await bcrypt.compare(password, user.password);
+        const match = await bcrypt.compare(password, user.password_hash);
 
-        if (match) {
-            res.status(200).json({
-                message: 'Login successful!',
-                userId: user.id,
-                username: user.username,
-                email: normalizeEmail(user.email) || null,
-            });
-        } else {
-            res.status(401).json({ error: 'Invalid credentials' });
+        if (!match) {
+            return res.status(401).json({ error: 'Invalid credentials' });
         }
+
+        res.status(200).json({
+            message: 'Login successful!',
+            userId: user.id,
+            username: user.username,
+            email: normalizeEmail(user.email),
+        });
     } catch (error) {
         console.error('Login error:', error);
         res.status(500).json({ error: 'Server error during login' });
     }
 });
 
-app.post('/password-reset/request', async (req, res) => {
+app.post('/password-reset/request', requireDatabase, async (req, res) => {
     const username = req.body.username?.trim();
     const email = normalizeEmail(req.body.email);
 
@@ -275,25 +256,25 @@ app.post('/password-reset/request', async (req, res) => {
     }
 
     try {
-        pruneResetTokens();
-        const users = await readDatabase();
-        const user = users.find((u) => u.username === username);
+        await deleteExpiredResetTokens();
+        const user = await findUserByUsername(username);
 
         if (!user) {
             return res.status(404).json({ error: 'User not found' });
         }
 
         const storedEmail = normalizeEmail(user.email);
-
-        if (!storedEmail) {
-            return res.status(400).json({ error: 'This account does not have a recovery email yet' });
-        }
-
         if (storedEmail !== email) {
             return res.status(400).json({ error: 'The recovery email does not match this username' });
         }
 
-        const resetRecord = createResetRecord(user, getBaseUrl(req));
+        const resetRecord = buildResetRecord(user, getBaseUrl(req));
+        await replaceResetToken({
+            token: resetRecord.token,
+            userId: user.id,
+            expiresAt: resetRecord.expiresAt,
+        });
+
         await sendResetEmail({
             to: storedEmail,
             username: user.username,
@@ -306,11 +287,11 @@ app.post('/password-reset/request', async (req, res) => {
         });
     } catch (error) {
         console.error('Password reset request error:', error);
-        res.status(500).json({ error: 'Could not send the reset email. Check your SMTP configuration.' });
+        res.status(500).json({ error: 'Could not send the reset email. Check your SMTP or database configuration.' });
     }
 });
 
-app.post('/password-reset/confirm', async (req, res) => {
+app.post('/password-reset/confirm', requireDatabase, async (req, res) => {
     const username = req.body.username?.trim();
     const token = req.body.token?.trim();
     const newPassword = req.body.newPassword;
@@ -324,31 +305,26 @@ app.post('/password-reset/confirm', async (req, res) => {
     }
 
     try {
-        pruneResetTokens();
-        const resetRecord = resetTokens.get(token);
+        await deleteExpiredResetTokens();
+        const resetRecord = await findResetToken(token);
 
-        if (!resetRecord || resetRecord.username !== username || resetRecord.expiresAt <= Date.now()) {
+        if (!resetRecord || new Date(resetRecord.expires_at).getTime() <= Date.now()) {
             return res.status(400).json({ error: 'This reset link is invalid or has expired' });
         }
 
-        const users = await readDatabase();
-        const userIndex = users.findIndex((u) => u.id === resetRecord.userId && u.username === username);
-
-        if (userIndex === -1) {
-            resetTokens.delete(token);
+        const user = await findUserByUsername(username);
+        if (!user || Number(user.id) !== Number(resetRecord.user_id)) {
             return res.status(404).json({ error: 'User not found for this reset request' });
         }
 
-        users[userIndex].password = await bcrypt.hash(newPassword, 10);
-        await writeDatabase(users);
-        clearUserResetTokens(resetRecord.userId);
+        const passwordHash = await bcrypt.hash(newPassword, 10);
+        await updateUserPassword(user.id, passwordHash);
+        await clearUserResetTokens(user.id);
 
         res.status(200).json({ message: 'Password reset successful. You can now log in with your new password.' });
     } catch (error) {
         console.error('Password reset confirm error:', error);
-        res.status(500).json({
-            error: 'Server error during password reset confirmation. On Vercel, password changes will not persist with users.json; use a real database.',
-        });
+        res.status(500).json({ error: 'Server error during password reset confirmation' });
     }
 });
 
@@ -357,7 +333,6 @@ module.exports = app;
 if (require.main === module) {
     app.listen(PORT, () => {
         console.log(`Server is running on http://localhost:${PORT}`);
-        console.log('Player data is stored in users.json for local development.');
-        console.log('For Vercel deployment, use a real database because users.json is not persistent there.');
+        console.log('Auth data now uses Postgres via DATABASE_URL or POSTGRES_URL.');
     });
 }

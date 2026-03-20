@@ -1,2 +1,6 @@
 # Datax
-A open source software to load data without the user knowing how to use SQL or any other Coding language, it is purely for beeigners so they can use our application for storing their data.
+Author - Somireddipalli Abhishek
+
+This is a open source software Datax that helps you to create databases without knowing any kind of SQL or quary language, just input your website link and we will
+
+just give us your excel sheet and we will store it in our database such that you can [EDIT, UPDATE, READ, OVERWRITE] on your existing data. 

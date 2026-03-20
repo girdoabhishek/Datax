@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Player Dashboard</title>
+    <style>
+        :root {
+            --bg-main: #0f172a;
+            --bg-panel: rgba(15, 23, 42, 0.82);
+            --bg-card: rgba(30, 41, 59, 0.92);
+            --accent: #38bdf8;
+            --accent-strong: #0ea5e9;
+            --text-main: #e2e8f0;
+            --text-soft: #94a3b8;
+            --success: #22c55e;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: 'Trebuchet MS', 'Segoe UI', sans-serif;
+            color: var(--text-main);
+            background:
+                radial-gradient(circle at top, rgba(56, 189, 248, 0.25), transparent 35%),
+                linear-gradient(135deg, #020617, var(--bg-main));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+        }
+
+        .dashboard {
+            width: min(920px, 100%);
+            background: var(--bg-panel);
+            border: 1px solid rgba(148, 163, 184, 0.18);
+            border-radius: 24px;
+            padding: 32px;
+            box-shadow: 0 24px 60px rgba(2, 6, 23, 0.45);
+            backdrop-filter: blur(10px);
+        }
+
+        .hero {
+            display: flex;
+            justify-content: space-between;
+            gap: 24px;
+            align-items: flex-start;
+            margin-bottom: 28px;
+            flex-wrap: wrap;
+        }
+
+        .hero h1 {
+            margin: 0 0 10px;
+            font-size: clamp(2rem, 5vw, 3.4rem);
+        }
+
+        .hero p {
+            margin: 0;
+            color: var(--text-soft);
+            max-width: 560px;
+            line-height: 1.5;
+        }
+
+        .user-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 16px;
+            border-radius: 999px;
+            background: rgba(56, 189, 248, 0.14);
+            color: var(--accent);
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            font-size: 0.82rem;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 18px;
+            margin-bottom: 28px;
+        }
+
+        .card {
+            background: var(--bg-card);
+            border-radius: 20px;
+            padding: 22px;
+            border: 1px solid rgba(148, 163, 184, 0.14);
+        }
+
+        .card h2 {
+            margin: 0 0 10px;
+            font-size: 1.15rem;
+        }
+
+        .card p {
+            margin: 0;
+            color: var(--text-soft);
+            line-height: 1.5;
+        }
+
+        .status {
+            color: var(--success);
+            font-weight: 700;
+        }
+
+        .actions {
+            display: flex;
+            gap: 14px;
+            flex-wrap: wrap;
+        }
+
+        button,
+        a.action-link {
+            border: none;
+            border-radius: 12px;
+            padding: 12px 18px;
+            font-size: 0.98rem;
+            font-weight: 700;
+            cursor: pointer;
+            text-decoration: none;
+            transition: transform 0.2s ease, opacity 0.2s ease, background-color 0.2s ease;
+        }
+
+        button:hover,
+        a.action-link:hover {
+            transform: translateY(-1px);
+            opacity: 0.96;
+        }
+
+        .primary-btn {
+            background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+            color: #082f49;
+        }
+
+        .secondary-btn {
+            background: rgba(148, 163, 184, 0.15);
+            color: var(--text-main);
+        }
+
+        @media (max-width: 640px) {
+            .dashboard {
+                padding: 24px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <main class="dashboard">
+        <section class="hero">
+            <div>
+                <div class="user-pill">Player Space</div>
+                <h1 id="welcomeHeading">Welcome back</h1>
+                <p>
+                    This is your personal login page. After signing in, each user lands here and sees
+                    their own space with account details and quick actions.
+                </p>
+            </div>
+            <div class="card">
+                <h2>Session Status</h2>
+                <p class="status">Authenticated</p>
+                <p id="userIdText">User ID:</p>
+            </div>
+        </section>
+
+        <section class="grid">
+            <article class="card">
+                <h2>Profile</h2>
+                <p id="profileText">Loading player profile...</p>
+            </article>
+            <article class="card">
+                <h2>Activity</h2>
+                <p>Your account is ready. You can now build this page into a full player dashboard.</p>
+            </article>
+            <article class="card">
+                <h2>Next Step</h2>
+                <p>Add game stats, saved progress, or settings here so every player gets a personalized interface.</p>
+            </article>
+        </section>
+
+        <section class="actions">
+            <a class="action-link primary-btn" href="index.html">Back to Auth</a>
+            <button class="secondary-btn" id="logoutBtn" type="button">Logout</button>
+        </section>
+    </main>
+
+    <script>
+        const currentUserRaw = localStorage.getItem('currentUser');
+
+        if (!currentUserRaw) {
+            window.location.href = 'index.html';
+        } else {
+            const currentUser = JSON.parse(currentUserRaw);
+            const welcomeHeading = document.getElementById('welcomeHeading');
+            const profileText = document.getElementById('profileText');
+            const userIdText = document.getElementById('userIdText');
+            const logoutBtn = document.getElementById('logoutBtn');
+
+            welcomeHeading.textContent = `Welcome, ${currentUser.username}`;
+            profileText.textContent = `${currentUser.username}, your personal interface is ready. This area belongs to your account only on this browser session.`;
+            userIdText.textContent = `User ID: ${currentUser.userId}`;
+
+            logoutBtn.addEventListener('click', () => {
+                localStorage.removeItem('currentUser');
+                window.location.href = 'index.html';
+            });
+        }
+    </script>
+</body>
+</html>
